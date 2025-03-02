@@ -8,57 +8,36 @@ generator client {
 }
 
 model Job {
-  id          Int           @id @default(autoincrement())
+  id          Int       @id @default(autoincrement())
   name        String
-  data        String        // JSON stringified data
-  status      String        // pending, active, completed, failed, cancelled, waiting, delayed
-  priority    Int           @default(0)
-  attempts    Int           @default(0)
-  maxAttempts Int           @default(3)
-  delay       Int           @default(0)
-  progress    Float?        // Job progress (0-100)
+  data        String    // JSON stringified data
+  status      String    // pending, active, completed, failed, cancelled, waiting, delayed
+  priority    Int       @default(0)
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(3)
+  delay       Int       @default(0)
+  progress    Float?    // Job progress (0-100)
   processedAt DateTime?
   finishedAt  DateTime?
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
-  result      String?       // JSON stringified result
-  error       String?       // Error message if failed
-  workerId    String?       // ID of worker processing this job
-  stalledAt   DateTime?     // When job was marked as stalled
-  cancelledAt DateTime?     // When job was cancelled
-  
-  // Relations
-  dependencies   JobDependency[] @relation("job")
-  dependents     JobDependency[] @relation("dependsOn")
-  children       JobRelation[]   @relation("parent")
-  parent         JobRelation[]   @relation("child")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  result      String?   // JSON stringified result
+  error       String?   // Error message if failed
+  workerId    String?   // ID of worker processing this job
+  stalledAt   DateTime? // When job was marked as stalled
+  cancelledAt DateTime? // When job was cancelled
 }
 
-model JobDependency {
-  id          Int      @id @default(autoincrement())
-  jobId       Int
-  dependsOnId Int
-  job         Job      @relation("job", fields: [jobId], references: [id], onDelete: Cascade)
-  dependsOn   Job      @relation("dependsOn", fields: [dependsOnId], references: [id], onDelete: Cascade)
-}
-
-model JobRelation {
+model RepeatableJob {
   id        Int      @id @default(autoincrement())
-  parentId  Int
-  childId   Int
-  parent    Job      @relation("parent", fields: [parentId], references: [id], onDelete: Cascade)
-  child     Job      @relation("child", fields: [childId], references: [id], onDelete: Cascade)
-}
-
-model CronJob {
-  id              Int      @id @default(autoincrement())
-  jobId           Int
-  queueName       String
-  jobName         String
-  cronExpression  String
-  data            String   // JSON stringified data
-  options         String   // JSON stringified options
-  nextRun         DateTime
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  name      String
+  data      String   // JSON stringified data
+  options   String   // JSON stringified options
+  nextRun   DateTime
+  pattern   String   // Interval or cron pattern
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  queueName String   // Name of the queue this job belongs to
+  limit           Int      @default(-1) // -1 means no limit
+  executionCount  Int      @default(0)
 }

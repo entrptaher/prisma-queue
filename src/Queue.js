@@ -1,4 +1,5 @@
 const { EventEmitter } = require('events');
+const cron = require('node-cron');
 
 class Queue extends EventEmitter {
   constructor(name, options = {}) {
@@ -12,13 +13,14 @@ class Queue extends EventEmitter {
       throw new Error('Prisma client instance is required');
     }
     this.paused = false;
+    this.repeatableJobs = new Map();
   }
 
   /**
    * Add a job to the queue
    * @param {string} jobName - Name of the job
    * @param {object} data - Job data
-   * @param {object} options - Job options
+   * @param {object} options - Job options including repeat settings
    * @returns {Promise<Job>} - The created job
    */
   async add(jobName, data, options = {}) {
@@ -26,6 +28,11 @@ class Queue extends EventEmitter {
       const now = new Date();
       const delay = options.delay || 0;
       const status = delay > 0 ? 'delayed' : 'pending';
+      
+      // Handle repeat options
+      if (options.repeat) {
+        return this.addRepeatableJob(jobName, data, options);
+      }
       
       // Ensure data is properly stringified
       const stringifiedData = typeof data === 'string' ? data : JSON.stringify(data);
@@ -45,6 +52,182 @@ class Queue extends EventEmitter {
       this.emit('error', error);
       throw error;
     }
+  }
+
+  /**
+   * Add a repeatable job
+   * @private
+   */
+  async addRepeatableJob(jobName, data, options) {
+    const { repeat } = options;
+    const key = `${jobName}:${JSON.stringify(data)}:${JSON.stringify(repeat)}`;
+
+    // If already scheduled, return existing
+    if (this.repeatableJobs.has(key)) {
+      return this.repeatableJobs.get(key).job;
+    }
+
+    let timer;
+    let nextRun;
+    let executionCount = 0;
+    const limit = repeat.limit || Infinity;
+
+    const createNewJob = async () => {
+      const now = new Date();
+      // Check if it's time to run the job
+      if (nextRun && nextRun > now) {
+        return;
+      }
+
+      executionCount++;
+      
+      // Stop if limit is reached
+      if (executionCount >= limit) {
+        if (timer.stop) {
+          timer.stop();
+        } else {
+          clearInterval(timer);
+        }
+        this.repeatableJobs.delete(key);
+        return;
+      }
+
+      // Create or update the job
+      const job = await this.prisma.job.create({
+        data: {
+          name: jobName,
+          data: typeof data === 'string' ? data : JSON.stringify(data),
+          status: 'pending',
+          priority: options.priority || 0,
+          maxAttempts: options.maxAttempts || 3,
+          createdAt: now
+        }
+      });
+
+      // Update next run time
+      if (repeat.cron) {
+        nextRun = this.getNextCronRunTime(repeat.cron);
+      } else if (typeof repeat === 'number') {
+        nextRun = new Date(now.getTime() + repeat);
+      } else if (repeat.every) {
+        const ms = this.parseInterval(repeat.every);
+        nextRun = new Date(now.getTime() + ms);
+      }
+
+      // Update the repeatable job record
+      await this.prisma.repeatableJob.update({
+        where: { id: repeatableJob.id },
+        data: {
+          nextRun,
+          executionCount
+        }
+      });
+
+      return job;
+    };
+
+    // Calculate initial nextRun time
+    if (repeat.cron) {
+      nextRun = this.getNextCronRunTime(repeat.cron);
+    } else if (typeof repeat === 'number') {
+      nextRun = new Date(Date.now() + repeat);
+    } else if (repeat.every) {
+      const ms = this.parseInterval(repeat.every);
+      nextRun = new Date(Date.now() + ms);
+    }
+
+    // Create initial repeatable job record
+    const repeatableJob = await this.prisma.repeatableJob.create({
+      data: {
+        name: jobName,
+        queueName: this.name,
+        data: JSON.stringify(data),
+        options: JSON.stringify({ ...options, repeat: { ...repeat, limit } }),
+        nextRun,
+        pattern: typeof repeat === 'number' ? `${repeat}ms` : 
+                repeat.cron ? repeat.cron : 
+                repeat.every ? (typeof repeat.every === 'number' ? `${repeat.every}ms` : repeat.every) : '',
+        limit,
+        executionCount: 0
+      }
+    });
+
+    // Don't create the initial job if it's a future cron job
+    if (repeat.cron && nextRun > new Date()) {
+      this.repeatableJobs.set(key, { timer, repeatableJob });
+      return null;
+    }
+
+    // Create initial job
+    const job = await this.prisma.job.create({
+      data: {
+        name: jobName,
+        data: typeof data === 'string' ? data : JSON.stringify(data),
+        status: 'pending',
+        priority: options.priority || 0,
+        maxAttempts: options.maxAttempts || 3,
+        createdAt: new Date()
+      }
+    });
+
+    this.repeatableJobs.set(key, { job, timer, repeatableJob });
+    return job;
+  }
+
+  /**
+   * Parse interval string or number to milliseconds
+   * @private
+   */
+  parseInterval(interval) {
+    // If interval is already a number, return it
+    if (typeof interval === 'number') {
+      return interval;
+    }
+
+    const units = {
+      second: 1000,
+      minute: 60 * 1000,
+      hour: 60 * 60 * 1000,
+      day: 24 * 60 * 60 * 1000,
+      week: 7 * 24 * 60 * 60 * 1000
+    };
+
+    const [count, unit] = interval.split(' ');
+    const baseUnit = unit.toLowerCase().replace(/s$/, '');
+    
+    if (!units[baseUnit]) {
+      throw new Error(`Invalid interval unit: ${unit}`);
+    }
+
+    return parseInt(count) * units[baseUnit];
+  }
+
+  /**
+   * Remove a repeatable job
+   */
+  async removeRepeatable(jobName, repeat) {
+    const key = `${jobName}:${JSON.stringify(repeat)}`;
+    const repeatable = this.repeatableJobs.get(key);
+    
+    if (repeatable) {
+      if (repeatable.timer.stop) {
+        repeatable.timer.stop();
+      } else {
+        clearInterval(repeatable.timer);
+      }
+      this.repeatableJobs.delete(key);
+
+      await this.prisma.repeatableJob.delete({
+        where: { id: repeatable.job.id }
+      });
+    }
+  }
+
+  /**
+   * Get all repeatable jobs
+   */
+  async getRepeatableJobs() {
+    return this.prisma.repeatableJob.findMany();
   }
 
   /**
@@ -450,6 +633,25 @@ class Queue extends EventEmitter {
    */
   async close() {
     await this.prisma.$disconnect();
+  }
+
+  // Helper method to calculate next cron run time
+  getNextCronRunTime(cronExpression) {
+    const parts = cronExpression.split(' ');
+    const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
+    
+    const now = new Date();
+    const nextRun = new Date(now);
+    nextRun.setSeconds(0);
+    nextRun.setMilliseconds(0);
+    nextRun.setMinutes(parseInt(minute) || 0);
+    nextRun.setHours(parseInt(hour) || 0);
+    
+    if (nextRun <= now) {
+        nextRun.setDate(nextRun.getDate() + 1);
+    }
+    
+    return nextRun;
   }
 }
 

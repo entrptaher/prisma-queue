@@ -1,46 +1,33 @@
 const QueueFactory = require('../src/QueueFactory');
 
 async function addJobs() {
-  try {
-    console.log('Creating queue...');
-    const queue = await QueueFactory.createQueue('myQueue', {
-      databaseUrl: 'file:custom.db'
-    });
+  const queue = await QueueFactory.createQueue('myQueue');
 
-    console.log('Adding jobs to queue...');
-    
-    // Add immediate job
-    const job1 = await queue.add('testJob', {
-      message: 'Immediate Task',
-      timestamp: Date.now()
-    });
-    console.log('Added immediate job:', job1.id);
+  // Repeat every 5 seconds, but only 3 times
+  await queue.add('repeatJob', { message: 'Every 5 seconds' }, {
+    repeat: {
+      every: 5000,
+      limit: 3
+    }
+  });
 
-    // Add job with 10 second delay
-    const job2 = await queue.add('testJob', {
-      message: 'Delayed Task (10s)',
-      timestamp: Date.now()
-    }, { delay: 10000 }); // 10 seconds delay
-    console.log('Added delayed job (10s):', job2.id);
+  // Repeat using cron expression - at midnight (00:00) every day
+  await queue.add('cronJob', { message: 'Every day at midnight' }, {
+    repeat: {
+      cron: '0 0 * * *',  // Changed from '* * * * *' to '0 0 * * *'
+      limit: 5
+    }
+  });
 
-    // Add job with 20 second delay
-    const job3 = await queue.add('testJob', {
-      message: 'Delayed Task (20s)',
-      timestamp: Date.now()
-    }, { delay: 20000 }); // 20 seconds delay
-    console.log('Added delayed job (20s):', job3.id);
+  // Repeat using human-readable interval, limited to 10 executions
+  await queue.add('intervalJob', { message: 'Every 2 hours' }, {
+    repeat: {
+      every: '2 hours',
+      limit: 10
+    }
+  });
 
-    // Close the queue connection
-    await queue.close();
-    console.log('Jobs added successfully');
-    console.log('Note: Delayed jobs will be processed after their delay time has passed');
-    process.exit(0);
-
-  } catch (error) {
-    console.error('Error:', error);
-    process.exit(1);
-  }
+  console.log('Jobs added. The cronJob will run at midnight each day.');
 }
 
-// Add some jobs
-addJobs();
+addJobs().catch(console.error);

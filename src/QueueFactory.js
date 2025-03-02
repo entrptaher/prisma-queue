@@ -18,14 +18,14 @@ class QueueFactory {
       const schemaPath = await this.createTempSchema(databaseUrl);
       
       try {
-        // Generate Prisma Client for this schema
+        // Generate Prisma Client for this schema (silent output)
         execSync(`npx prisma generate --schema=${schemaPath}`, {
-          stdio: 'inherit'
+          stdio: ['ignore', 'ignore', 'pipe'] // stdin, stdout, stderr
         });
         
-        // Push the schema to the database WITHOUT resetting
+        // Push the schema to the database WITHOUT resetting (silent output)
         execSync(`npx prisma db push --schema=${schemaPath}`, {
-          stdio: 'inherit'
+          stdio: ['ignore', 'ignore', 'pipe'] // stdin, stdout, stderr
         });
 
         // Create a new PrismaClient instance if it doesn't exist
@@ -41,7 +41,8 @@ class QueueFactory {
                 connectionTimeout: 20000,
                 queryTimeout: 20000
               }
-            }
+            },
+            log: ['error'] // Only log errors
           });
           
           await prisma.$connect();
