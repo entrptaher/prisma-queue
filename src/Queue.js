@@ -112,7 +112,7 @@ class Queue extends EventEmitter {
     try {
       const now = new Date();
       
-      // First try to get a pending job
+      // First try to get a pending or delayed job
       const job = await this.prisma.job.findFirst({
         where: {
           OR: [
@@ -127,10 +127,7 @@ class Queue extends EventEmitter {
               workerId: null,
               AND: {
                 createdAt: {
-                  lt: now
-                },
-                delay: {
-                  gt: 0
+                  lte: new Date(now.getTime())
                 }
               }
             }

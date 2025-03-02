@@ -23,8 +23,8 @@ class QueueFactory {
           stdio: 'inherit'
         });
         
-        // Push the schema to the database
-        execSync(`npx prisma db push --schema=${schemaPath} --accept-data-loss --force-reset`, {
+        // Push the schema to the database WITHOUT resetting
+        execSync(`npx prisma db push --schema=${schemaPath}`, {
           stdio: 'inherit'
         });
 
@@ -38,21 +38,16 @@ class QueueFactory {
             },
             __internal: {
               engine: {
-                connectionTimeout: 20000, // 20 seconds
-                queryTimeout: 20000      // 20 seconds
+                connectionTimeout: 20000,
+                queryTimeout: 20000
               }
             }
           });
           
-          // Test the connection
           await prisma.$connect();
-          
-          console.log("DB CONNECTED");
-
           this.prismaClients.set(key, prisma);
         }
 
-        // Create new queue instance
         const queue = new Queue(name, {
           ...options,
           prisma: this.prismaClients.get(key)
@@ -60,7 +55,6 @@ class QueueFactory {
         
         this.instances.set(key, queue);
       } finally {
-        // Clean up temp schema file
         fs.unlinkSync(schemaPath);
       }
     }
@@ -69,73 +63,17 @@ class QueueFactory {
   }
   
   static createTempSchema(databaseUrl) {
-    const schemaContent = `
-      datasource db {
-        provider = "sqlite"
-        url      = "${databaseUrl}"
-      }
-      
-      generator client {
-        provider = "prisma-client-js"
-      }
-      
-      model Job {
-        id          Int           @id @default(autoincrement())
-        name        String
-        data        String        // JSON stringified data
-        status      String        // pending, active, completed, failed, cancelled, waiting, delayed
-        priority    Int           @default(0)
-        attempts    Int           @default(0)
-        maxAttempts Int           @default(3)
-        delay       Int           @default(0)
-        progress    Float?        // Job progress (0-100)
-        processedAt DateTime?
-        finishedAt  DateTime?
-        createdAt   DateTime      @default(now())
-        updatedAt   DateTime      @updatedAt
-        result      String?       // JSON stringified result
-        error       String?       // Error message if failed
-        workerId    String?       // ID of worker processing this job
-        stalledAt   DateTime?     // When job was marked as stalled
-        cancelledAt DateTime?     // When job was cancelled
-        
-        // Relations
-        dependencies    JobDependency[] @relation("DependentJob")
-        dependents     JobDependency[] @relation("DependsOnJob")
-        childJobs      JobRelation[]   @relation("ParentJob")
-        parentJobs     JobRelation[]   @relation("ChildJob")
-      }
-      
-      model JobDependency {
-        id          Int      @id @default(autoincrement())
-        jobId       Int
-        dependsOnId Int
-        job         Job      @relation("DependentJob", fields: [jobId], references: [id], onDelete: Cascade)
-        dependsOn   Job      @relation("DependsOnJob", fields: [dependsOnId], references: [id], onDelete: Cascade)
-      }
-      
-      model JobRelation {
-        id       Int      @id @default(autoincrement())
-        parentId Int
-        childId  Int
-        parent   Job      @relation("ParentJob", fields: [parentId], references: [id], onDelete: Cascade)
-        child    Job      @relation("ChildJob", fields: [childId], references: [id], onDelete: Cascade)
-      }
-      
-      model CronJob {
-        id             Int      @id @default(autoincrement())
-        jobId         Int
-        queueName     String
-        jobName       String
-        cronExpression String
-        data          String   // JSON stringified data
-        options       String   // JSON stringified options
-        nextRun       DateTime
-        createdAt     DateTime @default(now())
-        updatedAt     DateTime @updatedAt
-      }
-    `;
+    // Read the original schema file
+    const originalSchemaPath = path.join(process.cwd(), 'prisma', 'schema.prisma');
+    let schemaContent = fs.readFileSync(originalSchemaPath, 'utf8');
     
+    // Replace the database URL in the schema
+    schemaContent = schemaContent.replace(
+      /url\s*=\s*"[^"]*"/,
+      `url = "${databaseUrl}"`
+    );
+    
+    // Create temporary schema file
     const tempPath = path.join(process.cwd(), `.temp-schema-${Date.now()}.prisma`);
     fs.writeFileSync(tempPath, schemaContent);
     return tempPath;
